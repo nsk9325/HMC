@@ -18,7 +18,7 @@ import os
 PUB_TOPIC_NAME = 'image_raw'
 
 # 데이터 입력 소스: 'camera', 'image', 또는 'video' 중 택1하여 입력
-DATA_SOURCE = 'video'
+DATA_SOURCE = 'camera'
 
 # 카메라(웹캠) 장치 번호 (ls /dev/video* 명령을 터미널 창에 입력하여 확인)
 CAM_NUM = 0
@@ -33,7 +33,7 @@ VIDEO_FILE_PATH = 'src/camera_perception_pkg/camera_perception_pkg/lib/Collected
 SHOW_IMAGE = True
 
 # 이미지 발행 주기 (초) - 소수점 필요 (int형은 반영되지 않음)
-TIMER = 0.03
+TIMER = 0.05
 #----------------------------------------------
 
 class ImagePublisherNode(Node):

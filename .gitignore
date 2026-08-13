@@ -1,3 +1,14 @@
 /install
 /build
 /log
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+
+# 주행 로그 - 실행할 때마다 생성됨
+/debug_logs
+
+# 학습 데이터셋 - Roboflow에 원본이 있으므로 저장소에 넣지 않음
+# (autodrive-vmctm v4 / new-workspace-q8evu)
+/Dataset
