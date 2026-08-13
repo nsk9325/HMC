@@ -46,15 +46,34 @@ breaks `colcon build`.
 
 ```bash
 pip install ultralytics==8.4.118 opencv-python==4.11.0 pyserial==3.5 keyboard==0.13.5
+
+# numpy 는 반드시 1.x 로 고정 (아래 참조)
+pip install "numpy==1.26.4"
+
+# 이 줄이 반드시 마지막
 pip install "setuptools==79.0.1" "packaging>=24.0"
 ```
+
+⚠️ **numpy must be 1.x.** ultralytics pulls numpy 2.x, but ROS 2 Humble's C extensions —
+`cv_bridge` above all — are compiled against numpy 1.x and fail with:
+
+```
+A module that was compiled using NumPy 1.x cannot be run in NumPy 2.2.6
+```
+
+`1.26.4` is the version the working machine runs and is compatible with both ultralytics
+8.4.118 and torch.
 
 Verify:
 
 ```bash
-python3 -c "import setuptools, packaging, torch; \
-print(setuptools.__version__, packaging.__version__, torch.__version__, torch.cuda.is_available())"
-# setuptools 79.0.1 · packaging >= 24 · cuda True
+python3 -c "import numpy, setuptools, packaging, torch; \
+print(numpy.__version__, setuptools.__version__, packaging.__version__, torch.__version__, torch.cuda.is_available())"
+# numpy 1.26.4 · setuptools 79.0.1 · packaging >= 24 · cuda True
+```
+
+```bash
+python3 -c "import cv_bridge, cv2; print('cv_bridge OK', cv2.__version__)"
 ```
 
 If `cuda` is `False`: `sudo ubuntu-drivers autoinstall` then reboot. CPU inference runs at
@@ -199,19 +218,81 @@ Work up toward 175 only once it holds a lane at 120.
 
 ## Command reference
 
+Every terminal first needs:
+
 ```bash
 cd ~/HMC && source install/setup.bash
+```
 
-# perception only, cannot move
-ros2 launch launch_pkg mission.launch.py data_source:=camera
+### The four driving modes
 
-# tuning: no light gate, logging on
+Two switches: `wait_for_green` (start gate) and `debug_log` (CSV recording).
+
+**1. Tuning — no light gate, no log.** Drives the moment the first path arrives.
+```bash
+ros2 launch launch_pkg mission.launch.py \
+    use_serial:=true data_source:=camera show_image:=false wait_for_green:=false
+```
+
+**2. Tuning with log** — for steering / creep tuning you want to review afterwards.
+```bash
 ros2 launch launch_pkg mission.launch.py \
     use_serial:=true data_source:=camera show_image:=false wait_for_green:=false debug_log:=true
+```
 
-# real mission run
+**3. Mission run with log** — waits for green, records everything. Use this for a full
+rehearsal and for diagnosing the start gate or lap counting.
+```bash
+ros2 launch launch_pkg mission.launch.py \
+    use_serial:=true data_source:=camera show_image:=false debug_log:=true
+```
+
+**4. Contest run** — waits for green, no logging overhead.
+```bash
 ros2 launch launch_pkg mission.launch.py \
     use_serial:=true data_source:=camera show_image:=false
+```
+
+### Bench mode — car physically cannot move
+
+`use_serial` defaults to `false`, so no command ever reaches the Arduino.
+```bash
+ros2 launch launch_pkg mission.launch.py data_source:=camera
+```
+
+### Second terminal — monitoring
+
+```bash
+cd ~/HMC && source install/setup.bash
+ros2 topic hz /detections                 # >= 10 Hz
+ros2 topic echo /topic_control_signal     # steering within ±2 on straights
+ros2 topic echo /yolov8_lane_info         # target_x must vary, not sit at 128
+ros2 topic echo /yolov8_traffic_light_info
+ros2 node list | grep serial              # serial_sender_node must be present
+
+# fake a green light (for modes 3/4 away from the signal)
+ros2 topic pub -r 10 /yolov8_traffic_light_info std_msgs/String "data: 'Green'"
+```
+
+### Live tuning (no restart)
+
+```bash
+ros2 param set /mission_planner_node cruise_speed 80
+ros2 param set /mission_planner_node steering_gain 0.35      # sluggish / understeer
+ros2 param set /mission_planner_node far_weight 1.0          # still understeering
+ros2 param set /mission_planner_node steering_smoothing 0.35 # still wobbling
+ros2 param set /mission_planner_node turn_slowdown 0.6       # steering pinned at ±7 in curves
+ros2 param set /mission_planner_node creep_duration_sec 1.2  # stops short of the line
+```
+
+`src_mat`, `lane_width`, `wait_for_green` and `debug_log` are read once at startup — those
+need a relaunch, not `param set`.
+
+### Logs
+
+```bash
+ls -t debug_logs/*.csv | head -1                              # newest run
+cut -d, -f2,4,10 debug_logs/mission_*.csv | grep WAIT_GREEN | tail -20
 ```
 
 Ctrl-C sends `s0l0r0` and stops the car. Keep the power switch as the real backup.
