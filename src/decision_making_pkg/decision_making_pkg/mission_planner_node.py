@@ -56,23 +56,23 @@ TARGET_LAP_COUNT = 2
 
 # --- 속도 (Arduino analogWrite 기준 0~255) ---
 # 실차 시험 결과 최고 속도의 약 70%가 제어 가능한 상한
-CRUISE_SPEED = 175      # 주행 속도
+CRUISE_SPEED = 220      # 주행 속도
 APPROACH_SPEED = 90     # 정지 목표 접근 속도
 CREEP_SPEED = 70        # 정지선을 차체 아래로 보내기 위한 미소 전진 속도
 
-# --- 조향 ---
+# --- 조향 ---ㅇㅇㅇㅇㅇ
 MAX_STEERING = 7        # 아두이노 조향 단계 상한 (한쪽 기준)
 STEERING_SLEW = 2       # 한 주기당 조향 변화량 제한 (진동 억제)
 
 # 조향 게인. 전방주시점 거리 = index x 1.76px, 조감도 1px ~= 0.234cm (차선폭 256px = 약 60cm)
-STEERING_GAIN = 0.30
+STEERING_GAIN = 0.2
 
 # 전방주시점을 2개 사용한다.
 #   near = 현재 위치 오차를 잡는 항  (반응성)
 #   far  = 다가올 곡률을 미리 반영하는 항 (선행성)
 # 한 점만 쓰면 이 둘이 뒤섞여, 직선에서 흔들리면서 곡선에서는 언더스티어가 난다.
 LOOKAHEAD_NEAR = 30     # 약 13cm 앞
-LOOKAHEAD_FAR = 85      # 약 35cm 앞
+LOOKAHEAD_FAR = 70      # 약 35cm 앞
 # 0=near만, 1=far만. 시뮬레이션 결과 (직선 잡음 / 곡선 응답):
 #   이전 단일60 무평활 : 부호반전 6회, 표준편차 0.68 / 급곡선 6
 #   w=0.5              : 0회, 0.53 / 5   <- 곡선 응답이 오히려 줄어듦
@@ -82,10 +82,10 @@ FAR_WEIGHT = 0.8
 
 # 조향 출력 지수평활 계수 (0~1). 낮을수록 부드럽지만 반응이 늦다.
 # 차선 마스크의 프레임별 잡음이 그대로 조향에 실리는 것을 막는다.
-STEERING_SMOOTHING = 0.5
+STEERING_SMOOTHING = 0.7
 
 # 조향이 클수록 감속: 최대 조향 시 CRUISE_SPEED * (1 - TURN_SLOWDOWN)
-TURN_SLOWDOWN = 0.45
+TURN_SLOWDOWN = 0.3
 
 # --- 랩 카운트 ---
 # 횡단보도 bbox 하단이 이 y(px, 640x480 원본 기준)를 넘으면 '통과'로 판정
@@ -98,7 +98,7 @@ CROSSWALK_TRIGGER_Y = 300
 #   t+66.3s 쿨다운 5초가 지나자 '같은' 횡단보도를 2바퀴째로 카운트
 #   결과: 5초 만에 2바퀴 완주로 판정하고 APPROACH 진입
 # 한 프레임 끊김으로 래치를 풀면 안 된다.
-CROSSWALK_CLEAR_SEC = 2.0
+CROSSWALK_CLEAR_SEC = 3.0
 
 # 한 번의 통과가 여러 번 세어지지 않도록 하는 최소 간격.
 # 실제 한 바퀴는 수십 초이므로 넉넉하게 잡는다.

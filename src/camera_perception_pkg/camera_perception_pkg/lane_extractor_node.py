@@ -55,8 +55,24 @@ LANE_CLASS_NAME = 'Lane2'
 # 나머지는 조용히 lane_width/2 폴백값을 반환하고 있었다.
 SRC_MAT = [258, 240, 452, 240, 547, 380, 170, 380]
 
-# 조감도 영상에서 아래쪽만 남기기 위한 절단 위치
-CUTTING_IDX = 300
+# 조감도 영상에서 아래쪽만 남기기 위한 절단 위치.
+# ROI 깊이 = (480 - CUTTING_IDX) 행, 조감도 1px ≈ 0.234cm (차선폭 256px = 약 60cm)
+#
+# 2026-08-13 실측: 조감도 각 깊이에서 차선 경계가 잡히는 비율
+#   42cm(y=300) 97% · 52cm 91% · 61cm 76% · 70cm 70%
+#   차선 폭은 어느 깊이에서도 260~270px 로 일정 -> 원근 보정이 먼 거리까지 유효
+#
+# 300 -> 240 으로 낮춰 전방 시야를 42cm -> 56cm 로 넓혔다.
+# 순항속도(175)에서 전방주시 시간이 0.33s -> 0.45s 가 되어 곡선 선행이 개선된다.
+# 180(70cm)까지 낮추면 스캔행의 30%가 폴백 분기로 빠지므로 여기서 멈춘다.
+#
+# ⚠️ 이 값을 바꾸면 launch 파일의 car_center_point y 도 (480 - CUTTING_IDX - 1) 로
+#    함께 바꿔야 한다. 어긋나면 경로가 조용히 왜곡된다.
+CUTTING_IDX = 240
+
+# 경로 계획에 넘길 타겟 포인트 개수. ROI 깊이에 맞춰 자동 분배되므로
+# CUTTING_IDX 를 바꿔도 따로 손댈 필요가 없다.
+TARGET_POINT_COUNT = 3
 
 # 조감도 기준 차선 폭 [px]
 # dst_mat이 영상 폭의 30~70% 구간이므로 src_mat이 차선 경계에 정확히 놓이면
@@ -89,6 +105,7 @@ class LaneExtractorNode(Node):
         self.lane_width = self.declare_parameter('lane_width', LANE_WIDTH).value
         self.theta_limit = self.declare_parameter('theta_limit', THETA_LIMIT).value
         self.detection_thickness = self.declare_parameter('detection_thickness', DETECTION_THICKNESS).value
+        self.target_point_count = self.declare_parameter('target_point_count', TARGET_POINT_COUNT).value
 
         self.cv_bridge = CvBridge()
 
@@ -170,8 +187,13 @@ class LaneExtractorNode(Node):
 
         grad = CPFL.dominant_gradient(roi_image, theta_limit=self.theta_limit)
 
+        # 타겟 포인트는 ROI 깊이에 맞춰 분배한다. cutting_idx 를 바꿔도 자동으로 따라간다.
+        roi_height = roi_image.shape[0]
+        step = max(1, (roi_height - 10) // self.target_point_count)
+        target_ys = [5 + i * step for i in range(self.target_point_count)]
+
         target_points = []
-        for target_point_y in range(5, 155, 50):
+        for target_point_y in target_ys:
             target_point_x = CPFL.get_lane_center(
                 roi_image,
                 detection_height=target_point_y,

@@ -90,7 +90,9 @@ def generate_launch_description():
             # 즉 보정 촬영 당시 차량은 차선 중심보다 약 26px(≈6cm) 왼쪽에 있었다.
             # 기본값 320을 쓰면 이 편차를 '중앙'으로 간주하여 계속 왼쪽으로 치우쳐 주행한다.
             # 카메라가 차량 중심선에 장착되어 있다는 가정이며, 실차에서 반드시 확인할 것.
-            parameters=[{'car_center_point': [294, 179]}]
+            # y = 480 - cutting_idx - 1. lane_extractor_node 의 CUTTING_IDX 와 반드시 일치시킬 것.
+            # (240 -> 239). 어긋나면 차량 기준점이 ROI 바닥이 아닌 곳에 놓여 경로가 왜곡된다.
+            parameters=[{'car_center_point': [294, 239]}]
         ),
         Node(
             package='decision_making_pkg',

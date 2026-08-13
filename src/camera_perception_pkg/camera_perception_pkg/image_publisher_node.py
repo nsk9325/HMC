@@ -68,6 +68,11 @@ class ImagePublisherNode(Node):
             self.cap = cv2.VideoCapture(self.cam_num)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            # 드라이버 버퍼를 1프레임으로 제한한다.
+            # 기본값에서는 V4L2 드라이버가 프레임을 쌓아두고 cap.read()가 '가장 오래된'
+            # 프레임을 반환하므로, 지연이 누적되어 제어기가 과거 영상을 보고 조향하게 된다.
+            # (data_collection 도구는 이미 이 설정을 하고 있다)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         elif self.data_source == 'video':
             self.cap = cv2.VideoCapture(self.video_path)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
