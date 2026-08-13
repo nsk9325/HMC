@@ -11,7 +11,10 @@ Companion documents:
 
 ## 1. Fresh laptop / fresh clone — setup order
 
-### ⚠️ 1.1 The repository MUST be cloned to `~/ros2_ws`
+### ⚠️ 1.1 The repository must sit exactly two levels below `/`
+
+Any name works (`~/ros2_ws`, `~/HMC`, …) and any username works. What breaks is **extra
+nesting**.
 
 This is not a style preference. `lib/__init__.py` in three packages loads its compiled
 `.pyc` library by **reconstructing an absolute path from a hardcoded slice of the current
@@ -28,10 +31,14 @@ It assumes the workspace root sits exactly two levels below `/`. Verified behavi
 |---|---|---|
 | `/home/user/ros2_ws` | `/home/user/ros2_ws/src/.../lib/*.pyc` | ✅ works |
 | `/home/student/ros2_ws` | `/home/student/ros2_ws/src/.../lib/*.pyc` | ✅ works (any username) |
-| `/home/user/ros2_ws2` | `/home/user/ros2_ws2/src/.../lib/*.pyc` | ✅ works (any ws name) |
-| **`/home/user/dev/ros2_ws`** | **`/home/user/dev/src/src/src/lib/*.pyc`** | ❌ `FileNotFoundError` |
+| `/home/user/HMC` | `/home/user/HMC/src/.../lib/*.pyc` | ✅ works (any workspace name) |
+| **`/home/user/dev/HMC`** | **`/home/user/dev/src/src/src/lib/*.pyc`** | ❌ `FileNotFoundError` |
+| **`/home/user/HMC/workspace`** | **`/home/user/HMC/src/src/src/lib/*.pyc`** | ❌ `FileNotFoundError` |
 
 Any extra directory level breaks it. Clone to `~/<name>` directly — never nested.
+Nothing in the source hardcodes the workspace name; all paths are relative or `__file__`-based.
+But **always run commands from the workspace root**, since `best.pt` and the bundled video
+path resolve against the current working directory.
 
 ### 1.2 Python must be 3.10
 
@@ -103,8 +110,8 @@ Verify before anything else:
 
 ```bash
 python3 -c "from ultralytics import YOLO; m=YOLO('best.pt'); print(m.task, m.names)"
-# expect: segment {0:'Car', 1:'Crosswalk', 2:'Greenlight', 3:'Lane1',
-#                  4:'Lane2', 5:'Mid', 6:'Red_light', 7:'Stopline', 8:'traffic_Light'}
+# expect: segment {0:'Car', 1:'Crosswalk', 2:'Greenlight', 3:'Lane1', 4:'Lane2',
+#                  5:'Mid', 6:'Orange_light', 7:'Red_light', 8:'Stopline'}
 ```
 
 If `task` is not `segment`, the lane pipeline cannot work — masks are required.
