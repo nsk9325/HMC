@@ -1,0 +1,25 @@
+# run.sh 가 자동 생성한다. 직접 고치지 말고 run.sh 상단의 변수를 수정할 것.
+/**:
+  ros__parameters:
+    cruise_speed: 255
+    approach_speed: 200
+    min_move_speed: 40
+    max_reverse_speed: 0
+    steering_gain: 0.2
+    steering_slew: 2
+    lookahead_near: 30
+    lookahead_far: 70
+    far_weight: 0.8
+    steering_smoothing: 0.7
+    turn_slowdown: 0.3
+    lap_landmark_min_score: 0.5
+    lap_landmark_min_height: 35
+    lap_landmark_clear_sec: 3.0
+    lap_cooldown_sec: 15.0
+    stopline_trigger_y: 430
+    stopline_latch_sec: 8.0
+    car_stop_bbox_height: 230
+    approach_timeout_sec: 30.0
+    path_timeout_sec: 1.0
+    blind_forward_sec: 2.0
+    blind_forward_speed: 90

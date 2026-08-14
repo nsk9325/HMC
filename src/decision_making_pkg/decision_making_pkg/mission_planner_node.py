@@ -330,7 +330,7 @@ class MissionPlanningNode(Node):
         'cruise_speed', 'approach_speed', 'target_lap_count',
         'steering_gain', 'steering_slew', 'lookahead_near', 'lookahead_far',
         'far_weight', 'steering_smoothing', 'turn_slowdown',
-        'lap_landmark_min_height', 'lap_cooldown_sec', 'lap_landmark_clear_sec',
+        'lap_landmark_min_height', 'lap_cooldown_sec', 'lap_landmark_clear_sec', 'lap_landmark_min_score',
         'stopline_trigger_y', 'stopline_latch_sec', 'car_stop_bbox_height',
         'approach_timeout_sec', 'min_move_speed', 'max_reverse_speed',
         'path_timeout_sec', 'blind_forward_sec', 'blind_forward_speed',

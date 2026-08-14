@@ -17,6 +17,7 @@
 #   show_image:=false     디버그 창을 끈다. 기본 true.
 #   debug_log:=true       주행 로그를 debug_logs/*.csv 로 남긴다. 기본 false.
 #   target_lap_count:=0   랩 카운트를 건너뛰고 바로 APPROACH. 정지 동작만 시험할 때.
+#   params_file:=<경로>    주행/정지 튜닝 YAML. 기본값은 run.sh 가 생성하는 파일.
 #
 # 주의: 아두이노 포트는 serial_sender_node.py 안에 PORT 상수로 박혀 있어 인자로 바꿀 수 없다.
 #       /dev/ttyACM0 이 아니면 그 파일을 직접 수정해야 한다.
@@ -24,6 +25,9 @@
 # 벤치 테스트:  ros2 launch launch_pkg mission.launch.py
 # 실차 주행:    ros2 launch launch_pkg mission.launch.py use_serial:=true data_source:=camera
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -55,6 +59,11 @@ def generate_launch_description():
                               description='주행 상태/검출 결과를 debug_logs/*.csv 로 기록'),
         DeclareLaunchArgument('target_lap_count', default_value='2',
                               description='완주 바퀴 수. 0 이면 즉시 APPROACH (정지 시험용)'),
+        DeclareLaunchArgument('params_file',
+                              default_value=os.path.join(
+                                  get_package_share_directory('launch_pkg'),
+                                  'config', 'mission_params.yaml'),
+                              description='주행/정지 튜닝 파라미터 YAML (run.sh 가 생성)'),
 
         Node(
             package='camera_perception_pkg',
@@ -102,7 +111,9 @@ def generate_launch_description():
             executable='mission_planner_node',
             name='mission_planner_node',
             output='screen',
-            parameters=[{'wait_for_green': LaunchConfiguration('wait_for_green'),
+            # YAML 을 먼저 두고 런치 인자를 뒤에 둔다 -> 런치 인자가 우선한다
+            parameters=[LaunchConfiguration('params_file'),
+                        {'wait_for_green': LaunchConfiguration('wait_for_green'),
                          'debug_log': LaunchConfiguration('debug_log'),
                          'target_lap_count': LaunchConfiguration('target_lap_count')}]
         ),
