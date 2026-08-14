@@ -339,30 +339,34 @@ class MissionPlanningNode(Node):
 
     def toggle_pause_cb(self, request, response):
         """일시정지 토글. 상태 기계는 유지한 채 구동 명령만 0 으로 만든다."""
-        now = self.now_sec()
-        self.paused = not self.paused
+        # 서비스 콜백에서 예외가 나면 rclpy 가 spin() 밖으로 전파시켜 노드가 죽는다.
+        # 일시정지는 주행 중에 쓰는 기능이므로 절대 노드를 죽여서는 안 된다.
+        try:
+            now = self.now_sec()
+            self.paused = not self.paused
 
-        if self.paused:
-            self.pause_started = now
-        else:
-            # 정지해 있던 시간만큼 타이머 기준시각을 뒤로 민다.
-            # 그렇지 않으면 일시정지 중에 APPROACH 타임아웃이나 ARM 래치가 만료된다.
-            if self.pause_started is not None:
-                held = now - self.pause_started
-                if self.approach_start_stamp is not None:
-                    self.approach_start_stamp += held
-                if self.stopline_armed_stamp is not None:
-                    self.stopline_armed_stamp += held
-                if self.last_lap_stamp is not None:
-                    self.last_lap_stamp += held
-                if self.crosswalk_last_seen is not None:
-                    self.crosswalk_last_seen += held
-            self.pause_started = None
+            if self.paused:
+                self.pause_started = now
+            else:
+                # 정지해 있던 시간만큼 타이머 기준시각을 뒤로 민다.
+                # 그렇지 않으면 일시정지 중에 APPROACH 타임아웃이나 랩 래치가 만료된다.
+                if self.pause_started is not None:
+                    held = now - self.pause_started
+                    for attr in ('approach_start_stamp', 'stopline_armed_stamp',
+                                 'last_lap_stamp', 'lap_landmark_last_seen'):
+                        value = getattr(self, attr, None)
+                        if value is not None:
+                            setattr(self, attr, value + held)
+                self.pause_started = None
 
-        state = "일시정지" if self.paused else "재개"
-        self.get_logger().warn(f"=== {state} ===")
-        response.success = True
-        response.message = "paused" if self.paused else "running"
+            state = "일시정지" if self.paused else "재개"
+            self.get_logger().warn(f"=== {state} ===")
+            response.success = True
+            response.message = "paused" if self.paused else "running"
+        except Exception as e:
+            self.get_logger().error(f"일시정지 토글 처리 중 오류: {e}")
+            response.success = False
+            response.message = str(e)
         return response
 
     def on_parameter_change(self, params):
