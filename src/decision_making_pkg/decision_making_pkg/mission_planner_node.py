@@ -8,13 +8,15 @@ mission_planner_node
 
     WAIT_GREEN ──(녹색 신호)──> DRIVING ──(2바퀴 완주)──> APPROACH
                                                             │
-                                          (정지선이 화면 하단 통과)
+                                    (정지선 목격 = ARM, 래치)
+                                                            │
+                                    (정차 차량 bbox 높이 도달)
                                                             ▼
-                                                          CREEP ──> STOPPED
+                                                         STOPPED
 
 원본 대비 변경점:
   1. 녹색 신호 대기 후 출발 (원본에는 출발 게이트 자체가 없음)
-  2. 횡단보도(Crosswalk) 검출로 랩 카운트
+  2. 신호등(색 무관) 검출로 랩 카운트
   3. 정지선(Stopline) + 정차 차량(Car) 기반 정지
   4. 비례 조향 (원본은 기울기 부호만 보는 ±7 뱅뱅 제어)
   5. 조향량에 따른 감속
@@ -36,6 +38,7 @@ from rclpy.qos import QoSDurabilityPolicy
 from rclpy.qos import QoSReliabilityPolicy
 
 from std_msgs.msg import String, Bool
+from std_srvs.srv import Trigger
 from interfaces_pkg.msg import PathPlanningResult, DetectionArray, MotionCommand
 
 #---------------Variable Setting---------------
@@ -46,7 +49,9 @@ SUB_LIDAR_OBSTACLE_TOPIC_NAME = "lidar_obstacle_info"
 PUB_TOPIC_NAME = "topic_control_signal"
 
 # YOLO 클래스 이름 (Roboflow 라벨과 대소문자까지 정확히 일치해야 함)
-CROSSWALK_CLASS_NAME = 'Crosswalk'
+# 랩 카운트 기준 랜드마크. 신호등은 출발/결승 지점에 있고 색과 무관하게 세야 하므로
+# 세 가지 점등 상태를 모두 포함한다.
+LAP_LANDMARK_CLASS_NAMES = ('Greenlight', 'Red_light', 'Orange_light')
 STOPLINE_CLASS_NAME = 'Stopline'
 CAR_CLASS_NAME = 'Car'
 
@@ -56,9 +61,11 @@ TARGET_LAP_COUNT = 2
 
 # --- 속도 (Arduino analogWrite 기준 0~255) ---
 # 실차 시험 결과 최고 속도의 약 70%가 제어 가능한 상한
-CRUISE_SPEED = 220      # 주행 속도
-APPROACH_SPEED = 90     # 정지 목표 접근 속도
-CREEP_SPEED = 70        # 정지선을 차체 아래로 보내기 위한 미소 전진 속도
+CRUISE_SPEED = 240      # 주행 속도
+# 정지 목표 접근 속도 (비례 감속의 최대값 = ratio 1.0 일 때의 속도).
+# 비례 감속이 의미를 가지려면 MIN_MOVE_SPEED 보다 충분히 커야 한다.
+# 90 이면 계산 속도가 h=45 부터 이미 바닥값에 붙어버려 사실상 정속이 된다.
+APPROACH_SPEED = 150
 
 # --- 조향 ---ㅇㅇㅇㅇㅇ
 MAX_STEERING = 7        # 아두이노 조향 단계 상한 (한쪽 기준)
@@ -88,17 +95,24 @@ STEERING_SMOOTHING = 0.7
 TURN_SLOWDOWN = 0.3
 
 # --- 랩 카운트 ---
-# 횡단보도 bbox 하단이 이 y(px, 640x480 원본 기준)를 넘으면 '통과'로 판정
-CROSSWALK_TRIGGER_Y = 300
+#
+# 랜드마크를 횡단보도에서 '신호등'으로 바꿨다.
+# 횡단보도는 정지 구역과 가까워 2바퀴째 카운트가 이르게 발생, 조기 정지를 유발했다.
+# 신호등은 출발/결승 지점에 있어 한 바퀴에 한 번만 지나가고, 검출도 강하다
+# (정지 구역 실측 conf 0.67~0.98).
+#
+# ⚠️ 신호등 bbox 높이는 근접 시 화면 상단에서 잘리므로(실측 상단y=0) 거리 척도로 쓸 수 없다.
+#    따라서 '보이는가'를 기준으로 하고, 멀리서 잡히는 것을 걸러내는 용도로만 높이를 쓴다.
+#    train 300장 실측: 신호등 검출 17%, 높이 중앙값 46 (p10=23, 최대 58).
+LAP_LANDMARK_MIN_SCORE = 0.5
+LAP_LANDMARK_MIN_HEIGHT = 35
 
-# 횡단보도가 이 시간 이상 '연속으로' 안 보여야 다음 통과를 받을 준비를 한다.
+# 랜드마크가 이 시간 이상 '연속으로' 안 보여야 다음 통과를 받을 준비를 한다.
 #
 # 2026-08-13 실주행 로그(mission_1786614496.csv)에서:
-#   t+62.2s 에 단 1프레임(0.1s) 미검출이 발생 -> 래치가 풀림
-#   t+66.3s 쿨다운 5초가 지나자 '같은' 횡단보도를 2바퀴째로 카운트
-#   결과: 5초 만에 2바퀴 완주로 판정하고 APPROACH 진입
+#   단 1프레임(0.1s) 미검출로 래치가 풀려, 같은 랜드마크를 5초 뒤 두 번째로 카운트했다.
 # 한 프레임 끊김으로 래치를 풀면 안 된다.
-CROSSWALK_CLEAR_SEC = 3.0
+LAP_LANDMARK_CLEAR_SEC = 3.0
 
 # 한 번의 통과가 여러 번 세어지지 않도록 하는 최소 간격.
 # 실제 한 바퀴는 수십 초이므로 넉넉하게 잡는다.
@@ -106,28 +120,71 @@ LAP_COOLDOWN_SEC = 15.0
 
 # --- 정지 판정 ---
 #
-# 역할 분담에 주의할 것:
-#   Stopline  = 실제 정지 트리거 (정지선이 범퍼에 닿는 순간)
-#   Car 높이  = '정지 구역에 들어왔다'는 확인용 게이트일 뿐, 정밀 거리 측정이 아니다
+# 2단계 구조. 두 조건을 '같은 프레임에서' 요구하지 않는 것이 핵심이다.
 #
-# img/stops/ 실측 (신규 모델, 지붕~휠 림 하단 기준):
-#   661: Car h=176, Stopline 하단 y=479  <- 정지선이 이미 범퍼에 도달
-#   411: Car h=209, Stopline 미검출      <- 정지선은 차체 아래로 사라진 뒤
+#   1) ARM   : 정지선이 범퍼에 닿는 것을 한 번이라도 보면 래치한다.
+#              "트랙의 올바른 위치에 왔다"는 확인용일 뿐, 정지 트리거가 아니다.
+#   2) STOP  : 래치된 상태에서 정차 차량의 bbox 높이가 임계값에 도달하면 정지.
+#
+# 왜 이렇게 바꿨는가 (img/stops/ 실측, conf 0.25):
+#   661: Car h=176, Stopline 하단 y=477 (conf 0.92)  <- 정지선이 보이는 유일한 순간
+#   411: Car h=210, Stopline 미검출                   <- 이미 차체 아래로 지나감
 #   380: Car h=236 (지나쳐서 후진 중)
 #   49 : Car h=251
+# 두 조건이 겹치는 구간이 사실상 한 순간뿐이라, 그 프레임에서 정지선을 놓치면
+# 영원히 정지하지 못하고 한 바퀴를 더 돌게 된다. 래치는 이 우연 의존을 없앤다.
 #
-# 즉 정지선이 보이는 시점에 Car 높이는 176 뿐이다. 이 값을 210 등으로 잡으면
-# 두 조건이 동시에 성립하는 순간이 존재하지 않아 영원히 정지하지 않는다.
-# 따라서 게이트는 176보다 낮게 두고, 정밀도는 CREEP_DURATION_SEC으로 맞춘다.
-CAR_MIN_BBOX_HEIGHT = 165
-# 정지선 bbox 하단이 이 y를 넘으면 곧 차체 아래로 들어간다고 판정
+# 또한 정지 트리거를 '시간(CREEP)'에서 'Car bbox 높이'로 바꾸면 거리 기반이 되어
+# 배터리 전압이 떨어져도 같은 위치에 선다. (같은 PWM = 더 느린 속도 = 더 짧은 전진)
+# Car 는 모든 정지 프레임에서 conf 0.90~0.95 로 잡히고, 차량이 화면 좌측으로 잘려도
+# 지붕~휠 림의 세로 길이는 남으므로 높이는 계속 유효하다.
+
+# 정지선 bbox 하단이 이 y를 넘으면 ARM (원본 640x480 좌표 기준)
 STOPLINE_TRIGGER_Y = 430
-# 정지선이 화면에서 사라진 뒤, 차체 중앙에 오도록 전진하는 시간
-CREEP_DURATION_SEC = 0.8
+# ARM 상태를 유지하는 시간. 접근 구간을 덮되 다음 바퀴로 새지 않을 만큼.
+STOPLINE_LATCH_SEC = 8.0
+# ARM 상태에서 이 높이에 도달하면 정지. 210=나란히, 236=지나침 이므로 그 사이.
+# 차량은 제동이 아니라 타력 주행으로 멈추므로, 밀리는 만큼 낮춰 잡는다.
+CAR_STOP_BBOX_HEIGHT = 205
+# APPROACH 안전장치: 이 시간 안에 정지하지 못하면 실패로 보고 정지한다.
+# (미정지 상태로 계속 주행하는 것보다 서는 편이 안전하다)
+APPROACH_TIMEOUT_SEC = 30.0
+
+# --- 정지 목표 접근 시 비례 감속 ---
+#
+# ARM 이후에는 남은 거리에 비례해 감속하여, 목표에 '거의 정지한 상태'로 도달한다.
+# 차량은 제동이 아니라 타력으로 멈추므로, 도달 속도를 낮추는 것이 곧 정지 정밀도다.
+#
+#   ratio = (car_stop_bbox_height - 현재 h) / car_stop_bbox_height
+#   속도  = APPROACH_SPEED * ratio
+#
+# bbox 높이는 거리에 반비례(h = k/Z)하므로 이 식이 남은 거리에 정확히 비례하지는
+# 않지만, 먼 곳에서 더 일찍 감속하는 보수적인 곡선이라 안전한 방향이다.
+#
+# ⚠️ MIN_MOVE_SPEED 는 반드시 실측할 것.
+#    이 값보다 작은 명령은 정지 마찰을 못 이겨 바퀴가 아예 돌지 않는다.
+#    바닥값이 없으면 목표(h=205)에 닿기 전에 멈춰 서고,
+#    STOPPED 조건을 만족하지 못한 채 APPROACH 타임아웃까지 대기하게 된다.
+#
+#    data_collection 도구(w 1회 = +10)로 실측한 결과 1~2회 만으로 크롤이 가능했으므로 20.
+#    주의: 이 값은 '정지 상태에서 출발'이 아니라 '이미 움직이는 상태를 유지'하는
+#    기준이다. 감속 구간에서는 운동마찰이 적용되므로 이 값이 맞다.
+MIN_MOVE_SPEED = 20
+
+# 목표를 지나쳤을 때(h > 목표) 후진으로 되돌릴지 여부.
+# 0 이면 후진 없이 정지만 한다. 실차에서 검증 후 켤 것 (예: 80).
+MAX_REVERSE_SPEED = 0
 
 # --- 안전 ---
-# 경로가 이 시간 이상 갱신되지 않으면 정지 (차선 인식 실패)
+# 경로가 이 시간 이상 갱신되지 않으면 '차선을 잃었다'고 판정
 PATH_TIMEOUT_SEC = 1.0
+
+# 차선을 잃은 직후의 대응.
+# 즉시 정지하면 횡단보도처럼 마스크가 잠깐 끊기는 구간에서 매번 멈춰 선다.
+# 반대로 마지막 조향을 유지하면 잘못된 조향값(예: -7)이 그대로 이어져 차선을 이탈한다.
+# 따라서 '조향 0 으로 잠시 직진'한 뒤, 그래도 회복되지 않으면 정지한다.
+BLIND_FORWARD_SEC = 2.0     # 이 시간까지는 직진 유지
+BLIND_FORWARD_SPEED = 90    # 직진 유지 중 속도
 # 주행 중에도 적색 신호에 정지할지 여부.
 # 본 미션의 신호등은 '출발 게이트'이므로 기본값은 False.
 STOP_ON_RED_WHILE_DRIVING = False
@@ -153,7 +210,6 @@ class MissionState(Enum):
     WAIT_GREEN = 'WAIT_GREEN'
     DRIVING = 'DRIVING'
     APPROACH = 'APPROACH'
-    CREEP = 'CREEP'
     STOPPED = 'STOPPED'
 
 
@@ -174,7 +230,6 @@ class MissionPlanningNode(Node):
         self.target_lap_count = self.declare_parameter('target_lap_count', TARGET_LAP_COUNT).value
         self.cruise_speed = self.declare_parameter('cruise_speed', CRUISE_SPEED).value
         self.approach_speed = self.declare_parameter('approach_speed', APPROACH_SPEED).value
-        self.creep_speed = self.declare_parameter('creep_speed', CREEP_SPEED).value
         self.steering_gain = self.declare_parameter('steering_gain', STEERING_GAIN).value
         self.steering_slew = self.declare_parameter('steering_slew', STEERING_SLEW).value
         self.lookahead_near = self.declare_parameter('lookahead_near', LOOKAHEAD_NEAR).value
@@ -184,13 +239,22 @@ class MissionPlanningNode(Node):
         self.debug_log = self.declare_parameter('debug_log', DEBUG_LOG).value
         self.debug_log_dir = self.declare_parameter('debug_log_dir', DEBUG_LOG_DIR).value
         self.turn_slowdown = self.declare_parameter('turn_slowdown', TURN_SLOWDOWN).value
-        self.crosswalk_trigger_y = self.declare_parameter('crosswalk_trigger_y', CROSSWALK_TRIGGER_Y).value
         self.lap_cooldown_sec = self.declare_parameter('lap_cooldown_sec', LAP_COOLDOWN_SEC).value
-        self.crosswalk_clear_sec = self.declare_parameter('crosswalk_clear_sec', CROSSWALK_CLEAR_SEC).value
-        self.car_min_bbox_height = self.declare_parameter('car_min_bbox_height', CAR_MIN_BBOX_HEIGHT).value
+        self.lap_landmark_clear_sec = self.declare_parameter(
+            'lap_landmark_clear_sec', LAP_LANDMARK_CLEAR_SEC).value
+        self.lap_landmark_min_score = self.declare_parameter(
+            'lap_landmark_min_score', LAP_LANDMARK_MIN_SCORE).value
+        self.lap_landmark_min_height = self.declare_parameter(
+            'lap_landmark_min_height', LAP_LANDMARK_MIN_HEIGHT).value
         self.stopline_trigger_y = self.declare_parameter('stopline_trigger_y', STOPLINE_TRIGGER_Y).value
-        self.creep_duration_sec = self.declare_parameter('creep_duration_sec', CREEP_DURATION_SEC).value
+        self.stopline_latch_sec = self.declare_parameter('stopline_latch_sec', STOPLINE_LATCH_SEC).value
+        self.car_stop_bbox_height = self.declare_parameter('car_stop_bbox_height', CAR_STOP_BBOX_HEIGHT).value
+        self.approach_timeout_sec = self.declare_parameter('approach_timeout_sec', APPROACH_TIMEOUT_SEC).value
+        self.min_move_speed = self.declare_parameter('min_move_speed', MIN_MOVE_SPEED).value
+        self.max_reverse_speed = self.declare_parameter('max_reverse_speed', MAX_REVERSE_SPEED).value
         self.path_timeout_sec = self.declare_parameter('path_timeout_sec', PATH_TIMEOUT_SEC).value
+        self.blind_forward_sec = self.declare_parameter('blind_forward_sec', BLIND_FORWARD_SEC).value
+        self.blind_forward_speed = self.declare_parameter('blind_forward_speed', BLIND_FORWARD_SPEED).value
         self.stop_on_red_while_driving = self.declare_parameter(
             'stop_on_red_while_driving', STOP_ON_RED_WHILE_DRIVING).value
         self.wait_for_green = self.declare_parameter('wait_for_green', WAIT_FOR_GREEN).value
@@ -218,9 +282,17 @@ class MissionPlanningNode(Node):
                 "실제 미션 주행에서는 True로 되돌릴 것.")
         self.lap_count = 0
         self.last_lap_stamp = None
-        self.crosswalk_latched = False   # 횡단보도 통과 중복 카운트 방지
-        self.crosswalk_last_seen = None  # 마지막으로 횡단보도가 보인 시각
-        self.creep_start_stamp = None
+        # 출발 시 차량은 신호등 바로 아래에 있다. 래치를 걸어둔 채로 시작해야
+        # 출발하자마자 1바퀴로 세어지지 않는다. 신호등이 시야에서 사라져야 풀린다.
+        self.lap_landmark_latched = True
+        self.lap_landmark_last_seen = None
+        self.stopline_armed_stamp = None  # 정지선을 마지막으로 본 시각 (ARM 래치)
+        self.approach_start_stamp = None  # APPROACH 진입 시각
+        self.stopline_armed = False       # ARM 여부 (compute_command 에서 참조)
+
+        # 일시정지 (서비스로 토글). 상태 기계는 그대로 두고 명령만 0 으로 만든다.
+        self.paused = False
+        self.pause_started = None
 
         # 출력 명령
         self.steering_command = 0
@@ -242,8 +314,65 @@ class MissionPlanningNode(Node):
         # 퍼블리셔 설정
         self.publisher = self.create_publisher(MotionCommand, self.pub_topic, self.qos_profile)
 
+        # 일시정지 토글 서비스
+        self.pause_srv = self.create_service(Trigger, '~/toggle_pause', self.toggle_pause_cb)
+
+        # 실행 중 파라미터 변경을 실제로 반영하기 위한 콜백.
+        # declare_parameter(...).value 는 생성 시점에 한 번만 읽으므로,
+        # 이 콜백이 없으면 ros2 param set 을 해도 노드 동작은 바뀌지 않는다.
+        self.add_on_set_parameters_callback(self.on_parameter_change)
+
         # 타이머 설정
         self.timer = self.create_timer(self.timer_period, self.timer_callback)
+
+    # 실행 중 변경 가능한 파라미터. 이름과 인스턴스 속성명이 같은 것만 허용한다.
+    LIVE_TUNABLE = {
+        'cruise_speed', 'approach_speed', 'target_lap_count',
+        'steering_gain', 'steering_slew', 'lookahead_near', 'lookahead_far',
+        'far_weight', 'steering_smoothing', 'turn_slowdown',
+        'lap_landmark_min_height', 'lap_cooldown_sec', 'lap_landmark_clear_sec',
+        'stopline_trigger_y', 'stopline_latch_sec', 'car_stop_bbox_height',
+        'approach_timeout_sec', 'min_move_speed', 'max_reverse_speed',
+        'path_timeout_sec', 'blind_forward_sec', 'blind_forward_speed',
+        'stop_on_red_while_driving',
+    }
+
+    def toggle_pause_cb(self, request, response):
+        """일시정지 토글. 상태 기계는 유지한 채 구동 명령만 0 으로 만든다."""
+        now = self.now_sec()
+        self.paused = not self.paused
+
+        if self.paused:
+            self.pause_started = now
+        else:
+            # 정지해 있던 시간만큼 타이머 기준시각을 뒤로 민다.
+            # 그렇지 않으면 일시정지 중에 APPROACH 타임아웃이나 ARM 래치가 만료된다.
+            if self.pause_started is not None:
+                held = now - self.pause_started
+                if self.approach_start_stamp is not None:
+                    self.approach_start_stamp += held
+                if self.stopline_armed_stamp is not None:
+                    self.stopline_armed_stamp += held
+                if self.last_lap_stamp is not None:
+                    self.last_lap_stamp += held
+                if self.crosswalk_last_seen is not None:
+                    self.crosswalk_last_seen += held
+            self.pause_started = None
+
+        state = "일시정지" if self.paused else "재개"
+        self.get_logger().warn(f"=== {state} ===")
+        response.success = True
+        response.message = "paused" if self.paused else "running"
+        return response
+
+    def on_parameter_change(self, params):
+        """ros2 param set 으로 들어온 값을 인스턴스 속성에 실제로 반영한다."""
+        from rcl_interfaces.msg import SetParametersResult
+        for param in params:
+            if param.name in self.LIVE_TUNABLE:
+                setattr(self, param.name, param.value)
+                self.get_logger().info(f"파라미터 변경: {param.name} = {param.value}")
+        return SetParametersResult(successful=True)
 
     # ------------------------------------------------------------------ #
     # 콜백
@@ -295,7 +424,7 @@ class MissionPlanningNode(Node):
                 best[d.class_name] = (d.score, d.bbox.size.y, self.bbox_bottom_y(d))
         # 클래스:점수:높이:하단y  - Car 높이와 Stopline 하단 위치를 사후 확인할 수 있어야 한다
         summary = ' '.join(f"{k}:{v[0]:.2f}:{v[1]:.0f}:{v[2]:.0f}" for k, v in sorted(best.items()))
-        age = (self.now_sec() - self.path_stamp) if self.path_stamp else -1.0
+        age = (self.now_sec() - self.path_stamp) if self.path_stamp is not None else -1.0
         try:
             self.log_file.write(
                 f"{self.now_sec():.2f},{self.state.value},{self.lap_count},"
@@ -322,6 +451,20 @@ class MissionPlanningNode(Node):
     @staticmethod
     def bbox_bottom_y(detection) -> float:
         return detection.bbox.center.position.y + detection.bbox.size.y / 2
+
+    def find_largest(self, class_name):
+        """해당 클래스 중 bbox 높이가 가장 큰 검출을 반환.
+
+        Car 처럼 '가장 가까운 것'을 원할 때는 이쪽을 쓴다. find_class 는 bbox 하단이
+        가장 아래인 것을 고르므로, 배경에 다른 차량이 있으면 엉뚱한 것을 집을 수 있다.
+        """
+        best = None
+        for detection in self.detections():
+            if detection.class_name != class_name:
+                continue
+            if best is None or detection.bbox.size.y > best.bbox.size.y:
+                best = detection
+        return best
 
     def find_class(self, class_name):
         """해당 클래스 중 bbox가 가장 아래(=가장 가까움)에 있는 검출을 반환."""
@@ -371,7 +514,8 @@ class MissionPlanningNode(Node):
         atan2는 해당 경우를 자연스럽게 처리하므로 직접 계산한다.
         """
         if not self.path_is_fresh() or len(self.path_data) < 2:
-            return self.steering_command
+            # 마지막 조향을 유지하면 잘못된 값이 그대로 이어지므로 직진을 반환한다.
+            return 0
 
         origin = self.path_data[-1]
         a_near = self.bearing_to(origin, self.lookahead_near)
@@ -407,6 +551,29 @@ class MissionPlanningNode(Node):
 
         return desired
 
+    def approach_speed_for(self, car) -> int:
+        """
+        ARM 이후 정지 목표까지 남은 거리에 비례해 감속한 속도를 반환한다.
+        목표가 보이지 않으면 기본 접근 속도를 그대로 쓴다.
+        """
+        if car is None:
+            return self.approach_speed
+
+        hd = float(self.car_stop_bbox_height)
+        ratio = (hd - car.bbox.size.y) / hd
+        speed = self.approach_speed * ratio
+
+        # 상한/하한
+        speed = max(-float(self.max_reverse_speed), min(float(self.approach_speed), speed))
+
+        # 정지 마찰 보정: 계산값이 너무 작으면 바퀴가 돌지 않으므로 바닥값을 준다
+        if 0.0 < speed < self.min_move_speed:
+            speed = float(self.min_move_speed)
+        elif -self.min_move_speed < speed < 0.0:
+            speed = -float(self.min_move_speed)
+
+        return int(round(speed))
+
     def speed_for(self, base_speed: int, steering: int) -> int:
         """조향량이 클수록 감속."""
         ratio = abs(steering) / float(MAX_STEERING)
@@ -415,28 +582,41 @@ class MissionPlanningNode(Node):
     # ------------------------------------------------------------------ #
     # 랩 카운트
     # ------------------------------------------------------------------ #
+    def find_lap_landmark(self):
+        """랩 카운트 기준이 되는 신호등(색 무관) 중 가장 큰 검출을 반환."""
+        best = None
+        for detection in self.detections():
+            if detection.class_name not in LAP_LANDMARK_CLASS_NAMES:
+                continue
+            if detection.score < self.lap_landmark_min_score:
+                continue
+            if detection.bbox.size.y < self.lap_landmark_min_height:
+                continue
+            if best is None or detection.bbox.size.y > best.bbox.size.y:
+                best = detection
+        return best
+
     def update_lap_count(self):
         """
-        횡단보도는 한 바퀴에 정확히 한 번 나타난다.
-        bbox 하단이 임계선을 넘는 순간을 '통과'로 보고, latch + 쿨다운으로
-        같은 통과가 여러 프레임에 걸쳐 중복 계수되는 것을 막는다.
+        신호등을 지나칠 때마다 한 바퀴로 센다.
+
+        출발 지점이 곧 신호등 아래이므로 래치를 건 상태로 시작한다.
+        즉 '신호등이 사라졌다가 다시 나타날 때'만 카운트되며,
+        출발 직후의 신호등 목격은 세지 않는다.
         """
         now = self.now_sec()
-        crosswalk = self.find_class(CROSSWALK_CLASS_NAME)
+        landmark = self.find_lap_landmark()
 
-        if crosswalk is not None:
-            self.crosswalk_last_seen = now
-        elif (self.crosswalk_latched
-              and self.crosswalk_last_seen is not None
-              and (now - self.crosswalk_last_seen) >= self.crosswalk_clear_sec):
+        if landmark is not None:
+            self.lap_landmark_last_seen = now
+        elif (self.lap_landmark_latched
+              and self.lap_landmark_last_seen is not None
+              and (now - self.lap_landmark_last_seen) >= self.lap_landmark_clear_sec):
             # 확실히 시야에서 벗어났을 때만 래치를 푼다.
-            # 단발성 미검출로 풀면 같은 횡단보도를 두 번 세게 된다.
-            self.crosswalk_latched = False
+            # 단발성 미검출로 풀면 같은 신호등을 두 번 세게 된다.
+            self.lap_landmark_latched = False
 
-        if crosswalk is None or self.bbox_bottom_y(crosswalk) < self.crosswalk_trigger_y:
-            return
-
-        if self.crosswalk_latched:
+        if landmark is None or self.lap_landmark_latched:
             return
 
         if self.last_lap_stamp is not None and (now - self.last_lap_stamp) < self.lap_cooldown_sec:
@@ -444,8 +624,10 @@ class MissionPlanningNode(Node):
 
         self.lap_count += 1
         self.last_lap_stamp = now
-        self.crosswalk_latched = True
-        self.get_logger().info(f"LAP {self.lap_count}/{self.target_lap_count} 완료")
+        self.lap_landmark_latched = True
+        self.get_logger().info(
+            f"LAP {self.lap_count}/{self.target_lap_count} 완료 "
+            f"({landmark.class_name} h={landmark.bbox.size.y:.0f})")
 
     # ------------------------------------------------------------------ #
     # 상태 전이
@@ -463,25 +645,35 @@ class MissionPlanningNode(Node):
                 self.state = MissionState.APPROACH
 
         elif self.state is MissionState.APPROACH:
-            car = self.find_class(CAR_CLASS_NAME)
-            car_is_near = car is not None and car.bbox.size.y >= self.car_min_bbox_height
+            now = self.now_sec()
+            if self.approach_start_stamp is None:
+                self.approach_start_stamp = now
 
+            # 1) ARM: 정지선을 한 번이라도 범퍼 근처에서 보면 래치한다.
             stopline = self.find_class(STOPLINE_CLASS_NAME)
-            stopline_at_bumper = (
-                stopline is not None
-                and self.bbox_bottom_y(stopline) >= self.stopline_trigger_y
-            )
+            if (stopline is not None
+                    and self.bbox_bottom_y(stopline) >= self.stopline_trigger_y):
+                if self.stopline_armed_stamp is None:
+                    self.get_logger().info("정지선 확인 - 정지 준비(ARM)")
+                self.stopline_armed_stamp = now
 
-            if car_is_near and stopline_at_bumper:
-                self.get_logger().info("정지선 도달 - 차체 중앙 정렬을 위해 미소 전진")
-                self.creep_start_stamp = self.now_sec()
-                self.state = MissionState.CREEP
+            armed = (self.stopline_armed_stamp is not None
+                     and (now - self.stopline_armed_stamp) <= self.stopline_latch_sec)
+            self.stopline_armed = armed
 
-        elif self.state is MissionState.CREEP:
-            # 정지선은 이미 카메라 사각(범퍼 아래)에 들어갔으므로 시간으로만 전진한다.
-            elapsed = self.now_sec() - self.creep_start_stamp
-            if elapsed >= self.creep_duration_sec:
-                self.get_logger().info("미션 완료 - 정지")
+            # 2) STOP: ARM 상태에서 정차 차량이 충분히 가까워지면 정지.
+            #    Car 는 배경 차량과 섞일 수 있으므로 '가장 큰' 것을 고른다.
+            car = self.find_largest(CAR_CLASS_NAME)
+            if armed and car is not None and car.bbox.size.y >= self.car_stop_bbox_height:
+                self.get_logger().info(
+                    f"정지 - 정차 차량 bbox 높이 {car.bbox.size.y:.0f} "
+                    f"(임계 {self.car_stop_bbox_height})")
+                self.state = MissionState.STOPPED
+
+            # 안전장치: 제한 시간 안에 정지하지 못하면 계속 도는 대신 선다.
+            elif (now - self.approach_start_stamp) > self.approach_timeout_sec:
+                self.get_logger().warn(
+                    f"APPROACH {self.approach_timeout_sec}s 초과 - 정지 조건 미충족, 정지")
                 self.state = MissionState.STOPPED
 
     # ------------------------------------------------------------------ #
@@ -492,23 +684,36 @@ class MissionPlanningNode(Node):
         if self.obstacle_detected():
             return 0, 0, 0
 
-        if self.state in (MissionState.WAIT_GREEN, MissionState.STOPPED):
+        # 일시정지: 상태는 유지하고 구동만 멈춘다
+        if self.paused:
             return 0, 0, 0
 
-        if self.state is MissionState.CREEP:
-            # 정지선을 차체 아래로 보내는 구간 - 조향 없이 직진
-            return 0, self.creep_speed, self.creep_speed
+        if self.state in (MissionState.WAIT_GREEN, MissionState.STOPPED):
+            return 0, 0, 0
 
         # DRIVING / APPROACH : 차선 추종
         if self.stop_on_red_while_driving and self.traffic_light_color() == 'Red':
             return 0, 0, 0
 
         if not self.path_is_fresh():
-            # 차선을 잃은 상태에서 계속 달리면 차선 이탈로 이어진다.
-            self.get_logger().warn("경로 신호 없음 - 정지", throttle_duration_sec=1.0)
+            age = (self.now_sec() - self.path_stamp) if self.path_stamp is not None else float('inf')
+            # 복귀 시 평활 필터가 옛 값에서 튀지 않도록 상태도 함께 0으로 맞춘다
+            self.steer_filtered = 0.0
+            if age <= (self.path_timeout_sec + self.blind_forward_sec):
+                self.get_logger().warn(
+                    "경로 신호 없음 - 조향 0 으로 직진 유지", throttle_duration_sec=1.0)
+                return 0, self.blind_forward_speed, self.blind_forward_speed
+            self.get_logger().warn("경로 신호 없음 지속 - 정지", throttle_duration_sec=1.0)
             return 0, 0, 0
 
         steering = self.compute_steering()
+
+        if self.state is MissionState.APPROACH and self.stopline_armed:
+            # ARM 이후에는 정지 목표까지의 거리에 비례해 감속한다.
+            # 조향에 따른 감속은 적용하지 않는다 (감속 요인이 두 번 곱해지는 것을 방지)
+            speed = self.approach_speed_for(self.find_largest(CAR_CLASS_NAME))
+            return steering, speed, speed
+
         base_speed = self.cruise_speed if self.state is MissionState.DRIVING else self.approach_speed
         speed = self.speed_for(base_speed, steering)
         return steering, speed, speed
@@ -526,7 +731,8 @@ class MissionPlanningNode(Node):
         self.right_speed_command = right_speed
 
         self.get_logger().info(
-            f"[{self.state.value}] lap: {self.lap_count}/{self.target_lap_count}, "
+            f"[{self.state.value}{'|PAUSED' if self.paused else ''}] "
+            f"lap: {self.lap_count}/{self.target_lap_count}, "
             f"steering: {self.steering_command}, "
             f"left_speed: {self.left_speed_command}, "
             f"right_speed: {self.right_speed_command}")

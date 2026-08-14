@@ -16,6 +16,7 @@
 #   device:=cpu           GPU가 준비되지 않은 경우. 기본 cuda:0.
 #   show_image:=false     디버그 창을 끈다. 기본 true.
 #   debug_log:=true       주행 로그를 debug_logs/*.csv 로 남긴다. 기본 false.
+#   target_lap_count:=0   랩 카운트를 건너뛰고 바로 APPROACH. 정지 동작만 시험할 때.
 #
 # 주의: 아두이노 포트는 serial_sender_node.py 안에 PORT 상수로 박혀 있어 인자로 바꿀 수 없다.
 #       /dev/ttyACM0 이 아니면 그 파일을 직접 수정해야 한다.
@@ -52,6 +53,8 @@ def generate_launch_description():
                               description='녹색 신호 대기 후 출발 (false면 즉시 주행 - 튜닝용)'),
         DeclareLaunchArgument('debug_log', default_value='false',
                               description='주행 상태/검출 결과를 debug_logs/*.csv 로 기록'),
+        DeclareLaunchArgument('target_lap_count', default_value='2',
+                              description='완주 바퀴 수. 0 이면 즉시 APPROACH (정지 시험용)'),
 
         Node(
             package='camera_perception_pkg',
@@ -100,7 +103,8 @@ def generate_launch_description():
             name='mission_planner_node',
             output='screen',
             parameters=[{'wait_for_green': LaunchConfiguration('wait_for_green'),
-                         'debug_log': LaunchConfiguration('debug_log')}]
+                         'debug_log': LaunchConfiguration('debug_log'),
+                         'target_lap_count': LaunchConfiguration('target_lap_count')}]
         ),
         Node(
             package='serial_communication_pkg',

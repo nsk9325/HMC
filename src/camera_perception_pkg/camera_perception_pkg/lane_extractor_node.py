@@ -192,15 +192,31 @@ class LaneExtractorNode(Node):
         step = max(1, (roi_height - 10) // self.target_point_count)
         target_ys = [5 + i * step for i in range(self.target_point_count)]
 
-        target_points = []
-        for target_point_y in target_ys:
-            target_point_x = CPFL.get_lane_center(
+        target_xs = [
+            CPFL.get_lane_center(
                 roi_image,
-                detection_height=target_point_y,
+                detection_height=y,
                 detection_thickness=self.detection_thickness,
                 road_gradient=grad,
                 lane_width=self.lane_width)
+            for y in target_ys
+        ]
 
+        # CPFL.get_lane_center 는 차선을 찾지 못해도 실패를 알리지 않고
+        # lane_width/2 라는 고정값을 돌려준다. 차량 기준점(약 294)보다 한참 왼쪽이라,
+        # 이 값이 그대로 경로가 되면 차량이 매 프레임 왼쪽으로 끌려간다.
+        # (횡단보도 위에서 Lane2 마스크가 끊길 때 실제로 이 경로로 반대 차선에 진입했다)
+        # 따라서 모든 타겟이 이 폴백값이면 '차선 못 찾음'으로 보고 발행하지 않는다.
+        # -> 경로가 stale 이 되고, mission_planner 가 직진 유지로 대응한다.
+        fallback = self.lane_width / 2.0
+        if all(abs(x - fallback) < 1.0 for x in target_xs):
+            self.get_logger().warn(
+                "차선을 찾지 못함 (전부 폴백값) - LaneInfo 발행 생략",
+                throttle_duration_sec=2.0)
+            return
+
+        target_points = []
+        for target_point_y, target_point_x in zip(target_ys, target_xs):
             target_point = TargetPoint()
             target_point.target_x = round(target_point_x)
             target_point.target_y = round(target_point_y)
